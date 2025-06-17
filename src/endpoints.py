@@ -2,6 +2,10 @@ from flask import Flask, jsonify, request
 import psycopg
 import os
 from dotenv import load_dotenv
+import argparse
+import json
+
+grid_cols = None
 
 
 app = Flask(__name__)
@@ -9,7 +13,7 @@ tabla = "variables"
 
 
 def conectar():
-    
+    """Establece una conexión a la base de datos PostgreSQL usando credenciales cargadas desde variable de entorno"""
     load_dotenv()        
     conn = psycopg.connect(
         host=os.getenv("DB_HOST"),
@@ -32,20 +36,21 @@ def fetch_variables():
     """Obtiene las variables de la base de datos."""
     with conectar() as conn:
         with conn.cursor() as curs:
+            casos = []
+            for grid, cols in grid_cols.items():
+                cond = [f"{col} IS NOT NULL OR {col} <> '{{}}'" for col in cols]
+                if cond:
+                    caso = f"CASE WHEN {' AND '.join(cond)} THEN '{grid}' END"
+                    casos.append(caso)
+            available_grids = "ARRAY_REMOVE(ARRAY[" + ", ".join(casos) + "]::varchar[], NULL)"
+
             query = f"""
                 WITH aux AS (
                     SELECT id, 
-                            CONCAT(name, '_-_', bin) AS name, 
-                            ARRAY_REMOVE(
-                                ARRAY[
-                                CASE WHEN interval_state IS NOT NULL AND cells_state IS NOT NULL AND cells_state <> '{{}}' THEN 'state' END,
-                                CASE WHEN interval_mun IS NOT NULL AND cells_mun IS NOT NULL AND cells_mun <> '{{}}' THEN 'mun' END,
-                                CASE WHEN interval_ageb IS NOT NULL AND cells_ageb IS NOT NULL AND cells_ageb <> '{{}}' THEN 'ageb' END
-                                ]::varchar[], 
-                                NULL
-                            ) AS available_grids, 
-                            0 AS level_size, 
-                            ARRAY[]::varchar[] AS filter_fields
+                        CONCAT(name, '_-_', bin) AS name, 
+                        {available_grids} AS available_grids, 
+                        0 AS level_size, 
+                        ARRAY[]::varchar[] AS filter_fields
                     FROM {tabla}
                 )
                 SELECT json_agg(aux) FROM aux;
@@ -117,4 +122,29 @@ def get_data_id(id):
 
 
 if __name__ == '__main__':
+    
+    parser = argparse.ArgumentParser(description="Endpoints Censo INEGI 2020")
+    parser.add_argument('--grid-cols', type=str, required=True, help='Ruta al archivo JSON que indica las columnas que incluyen información correspondiente a cada malla')
+    args = parser.parse_args()
+
+    with open(args.grid_cols) as f:
+        grid_cols = json.load(f)
+
+    with conectar() as conn:
+        with conn.cursor() as curs:
+            curs.execute(f"""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = %s
+            """, (tabla,))
+            columnas_validas = {row[0] for row in curs.fetchall()}
+
+    columnas_json = set()
+    for cols in grid_cols.values():
+        columnas_json.update(cols)
+
+    columnas_invalidas = columnas_json - columnas_validas
+    if columnas_invalidas:
+        raise ValueError(f"Las siguientes columnas no existen: {columnas_invalidas}")
+
     app.run(host='0.0.0.0', port=2112)
