@@ -2,10 +2,11 @@ from flask import Flask, jsonify, request
 import psycopg
 import os
 from dotenv import load_dotenv
+import requests
 import argparse
 import json
 
-grid_cols = None
+col_info = None
 
 
 app = Flask(__name__)
@@ -25,6 +26,17 @@ def conectar():
     return conn
 
 
+def obtener_resolution_por_grid_id(grid_id):
+    """Consulta el endpoint dado y devuelve el valor de 'resolution' para el grid_id especificado"""
+    resp = requests.get("http://chilamdev.c3.unam.mx:5001/regions/region-grids/")
+    resp.raise_for_status()
+    data = resp.json()
+    for item in data.get("data", []):
+        if str(item.get("grid_id")) == str(grid_id):
+            return item.get("resolution")
+    return None
+
+
 @app.route('/')
 def saludo():
     """Ruta de saludo inicial."""
@@ -36,18 +48,21 @@ def fetch_variables():
     """Obtiene las variables de la base de datos."""
     with conectar() as conn:
         with conn.cursor() as curs:
+            
+            levels = col_info.get("levels", [])
+            name = "ARRAY[" + ", ".join(levels) + "]::varchar[]"
+            
             casos = []
-            for grid, cols in grid_cols.items():
-                cond = [f"{col} IS NOT NULL OR {col} <> '{{}}'" for col in cols]
-                if cond:
-                    caso = f"CASE WHEN {' AND '.join(cond)} THEN '{grid}' END"
-                    casos.append(caso)
+            for grid, info in col_info.get("grids", {}).items():
+                cond = f"{info.get("data")} IS NOT NULL OR {info.get("data")} <> '{{}}'"
+                caso = f"CASE WHEN {cond} THEN '{grid}' END"
+                casos.append(caso)
             available_grids = "ARRAY_REMOVE(ARRAY[" + ", ".join(casos) + "]::varchar[], NULL)"
 
             query = f"""
                 WITH aux AS (
                     SELECT id, 
-                        CONCAT(name, '_-_', bin) AS name, 
+                        {name} AS name, 
                         {available_grids} AS available_grids, 
                         0 AS level_size, 
                         ARRAY[]::varchar[] AS filter_fields
@@ -90,13 +105,17 @@ def variables_id(id):
 @app.route('/get-data/<id>')
 def get_data_id(id):
     """Obtiene datos específicos de una covariable por ID y filtros opcionales."""
-    grid_id = request.args.get('grid_id')  # mun | state | ageb
+    grid_id = request.args.get('grid_id')  # state:17 | mun:18 | ageb:19
     levels_id = request.args.get('levels_id', type=lambda v: v.split(','))
     filter_names = request.args.get('filter_names', type=lambda v: v.split(','))
     filter_values = request.args.get('filter_values', type=lambda v: v.split(','))
 
     if not grid_id:
         return jsonify({'error': 'grid_id es requerido'}), 400
+    
+    grid = obtener_resolution_por_grid_id(grid_id)
+    if not grid:
+        return jsonify({'error': 'ID no encontrado'}), 404
 
     with conectar() as conn:
         with conn.cursor() as curs:
@@ -105,8 +124,8 @@ def get_data_id(id):
                     SELECT id, 
                             %s as grid_id, 
                             0 as level_id, 
-                            cells_{grid_id} :: text[] AS cells, 
-                            array_length(string_to_array(cells_{grid_id}, ','), 1) AS n
+                            cells_{grid} :: text[] AS cells, 
+                            array_length(string_to_array(cells_{grid}, ','), 1) AS n
                     FROM variables
                     WHERE id = %s
                 )
@@ -124,11 +143,11 @@ def get_data_id(id):
 if __name__ == '__main__':
     
     parser = argparse.ArgumentParser(description="Endpoints Censo INEGI 2020")
-    parser.add_argument('--grid-cols', type=str, required=True, help='Ruta al archivo JSON que indica las columnas que incluyen información correspondiente a cada malla')
+    parser.add_argument('--column-info', type=str, required=True, help='Ruta al archivo JSON que indica la información correspondiente a las columnas')
     args = parser.parse_args()
 
-    with open(args.grid_cols) as f:
-        grid_cols = json.load(f)
+    with open(args.column_info) as f:
+        col_info = json.load(f)
 
     with conectar() as conn:
         with conn.cursor() as curs:
@@ -140,8 +159,30 @@ if __name__ == '__main__':
             columnas_validas = {row[0] for row in curs.fetchall()}
 
     columnas_json = set()
-    for cols in grid_cols.values():
-        columnas_json.update(cols)
+    
+    if "levels" not in col_info:
+        raise ValueError(f"El archivo JSON debe tener la clave 'levels'")
+    levels = col_info.get("levels")
+    print(levels)
+    print(type(levels))
+    if not isinstance(levels, list) or not all(isinstance(x, str) for x in levels):
+        raise ValueError("El valor asociado a 'levels' debe ser una lista de cadenas no vacia")
+    columnas_json.update(levels)
+    
+    if "grids" not in col_info:
+        raise ValueError(f"El archivo JSON debe tener la clave 'grids'")
+    grids = col_info.get("grids", {})
+    if not isinstance(grids, dict) or not bool(grids):
+        raise ValueError("'grids' debe ser un diccionario no vacio")
+    for grid_name, grid_info in grids.items():
+        if not isinstance(grid_info, dict):
+            raise ValueError(f"El valor asociado a '{grid_name}' debe ser un diccionario")
+        if "data" not in grid_info:
+            raise ValueError(f"El grid '{grid_name}' debe tener la clave 'data'")
+        data = grid_info.get("data")
+        if not isinstance(data, str):
+            raise ValueError("El valor asociado a 'data' debe ser una cadena")
+        columnas_json.add(data)
 
     columnas_invalidas = columnas_json - columnas_validas
     if columnas_invalidas:
