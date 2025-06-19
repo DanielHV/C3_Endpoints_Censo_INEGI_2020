@@ -1,0 +1,14 @@
+{
+    "levels" : ["name", "bin"],
+    "grids" : {
+        "state" : {
+            "data" : "cells_state"
+        },
+        "mun" : {
+            "data" : "cells_mun"
+        },
+        "ageb" : {
+            "data" : "cells_ageb"
+        }
+    }
+}
