@@ -10,7 +10,7 @@ col_info = None
 
 
 app = Flask(__name__)
-tabla = "variables"
+tabla = os.getenv("DB_TABLE", "variables")
 
 
 def conectar():
@@ -49,12 +49,12 @@ def fetch_variables():
     with conectar() as conn:
         with conn.cursor() as curs:
             
-            levels = col_info.get("levels", [])
+            levels = col_info["levels"]
             name = "ARRAY[" + ", ".join(levels) + "]::varchar[]"
             
             casos = []
             for grid, info in col_info.get("grids", {}).items():
-                cond = f"{info.get("data")} IS NOT NULL OR {info.get("data")} <> '{{}}'"
+                cond = f"{info["data"]} IS NOT NULL OR {info["data"]} <> '{{}}'"
                 caso = f"CASE WHEN {cond} THEN '{grid}' END"
                 casos.append(caso)
             available_grids = "ARRAY_REMOVE(ARRAY[" + ", ".join(casos) + "]::varchar[], NULL)"
@@ -162,9 +162,7 @@ if __name__ == '__main__':
     
     if "levels" not in col_info:
         raise ValueError(f"El archivo JSON debe tener la clave 'levels'")
-    levels = col_info.get("levels")
-    print(levels)
-    print(type(levels))
+    levels = col_info.get("levels", [])
     if not isinstance(levels, list) or not all(isinstance(x, str) for x in levels):
         raise ValueError("El valor asociado a 'levels' debe ser una lista de cadenas no vacia")
     columnas_json.update(levels)
