@@ -64,7 +64,7 @@ def fetch_variables():
                     SELECT id, 
                         {name} AS name, 
                         {available_grids} AS available_grids, 
-                        0 AS level_size, 
+                        {len(levels)} AS level_size, 
                         ARRAY[]::varchar[] AS filter_fields
                     FROM {tabla}
                 )
@@ -116,6 +116,8 @@ def get_data_id(id):
     grid = obtener_resolution_por_grid_id(grid_id)
     if not grid:
         return jsonify({'error': 'ID no encontrado'}), 404
+    
+    col_data = col_info["grids"][grid]["data"]
 
     with conectar() as conn:
         with conn.cursor() as curs:
@@ -124,8 +126,8 @@ def get_data_id(id):
                     SELECT id, 
                             %s as grid_id, 
                             0 as level_id, 
-                            cells_{grid} :: text[] AS cells, 
-                            array_length(string_to_array(cells_{grid}, ','), 1) AS n
+                            {col_data} :: text[] AS cells, 
+                            array_length(string_to_array({col_data}, ','), 1) AS n
                     FROM variables
                     WHERE id = %s
                 )
