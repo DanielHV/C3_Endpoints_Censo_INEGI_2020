@@ -112,10 +112,26 @@ def get_data_id(id):
 
     if not grid_id:
         return jsonify({'error': 'grid_id es requerido'}), 400
+    if not levels_id:
+        return jsonify({'error': 'levels_id es requerido'}), 400
     
     grid = obtener_resolution_por_grid_id(grid_id)
     if not grid:
         return jsonify({'error': 'ID no encontrado'}), 404
+
+    if grid not in col_info["grids"].keys():
+        return jsonify({'error': f'La malla obtenida con el ID {grid_id} ({grid}) no fue especificada en el archivo JSON'}), 404
+    
+    try:
+        levels_id = [int(x) for x in levels_id if x != '']
+        levels_id.sort()
+    except:
+        return jsonify({'error': f'Los niveles especificados en levels_id deben ser numericos'}), 400
+    try:
+        level_id = [col_info["levels"][level] for level in levels_id]
+        level_id_array = "ARRAY[" + ", ".join(level_id) + "]"
+    except:
+        return jsonify({'error': f'Se especificaron niveles diferentes de los existentes'}), 400
     
     col_data = col_info["grids"][grid]["data"]
 
@@ -125,10 +141,10 @@ def get_data_id(id):
                 WITH aux AS (
                     SELECT id, 
                             %s as grid_id, 
-                            0 as level_id, 
-                            {col_data} :: text[] AS cells, 
+                            {level_id_array}::text[] AS level_id, 
+                            {col_data}::text[] AS cells, 
                             array_length(string_to_array({col_data}, ','), 1) AS n
-                    FROM variables
+                    FROM {tabla}
                     WHERE id = %s
                 )
                 SELECT json_agg(aux) FROM aux;
